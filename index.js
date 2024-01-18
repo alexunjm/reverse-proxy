@@ -1,42 +1,82 @@
-var http = require('http'),
-    net = require('net'),
-    _c = require('colors'),
-    url = require('url'),
-    httpProxy = require('http-proxy');//https://github.com/http-party/node-http-proxy/blob/master/examples/http/basic-proxy.js
+import dotenv from 'dotenv'
+import "colors";
+import express from "express";
+import cors from "cors";
 
-var welcome = [
-  '#    # ##### ##### #####        #####  #####   ####  #    # #   #',
-  '#    #   #     #   #    #       #    # #    # #    #  #  #   # # ',
-  '######   #     #   #    # ##### #    # #    # #    #   ##     #  ',
-  '#    #   #     #   #####        #####  #####  #    #   ##     #  ',
-  '#    #   #     #   #            #      #   #  #    #  #  #    #  ',
-  '#    #   #     #   #            #      #    #  ####  #    #   #  '
-].join('\n');
+if (process.env.ENVFILE) {
+  dotenv.config({ path: process.env.ENVFILE });
+} else {
+  dotenv.config();
+}
 
-console.log(welcome.rainbow);
+import logger from "./logger.js";
 
+const app = express();
+app.use(cors())
 
-var proxy = httpProxy.createServer();
+const welcome = [
+  "",
+  "                                                                   ",
+  " *    * ***** ***** *****        *****  *****   ****  *    * *   * ",
+  " *    *   *     *   *    *       *    * *    * *    *  *  *   * *  ",
+  " ******   *     *   *    * ***** *    * *    * *    *   **     *   ",
+  " *    *   *     *   *****        *****  *****  *    *   **     *   ",
+  " *    *   *     *   *            *      *   *  *    *  *  *    *   ",
+  " *    *   *     *   *            *      *    *  ****  *    *   *   ",
+  "                                                                   ",
+  "",
+].map(row => row.replace(/\s/g, '#'.blue).replace(/\*/g, '#'.yellow)).join("\n");
+logger.info(welcome);
 
-var server = http.createServer(function (req, res) {
-  console.log('Receiving reverse proxy request for: ' + req.url);
-  var parsedUrl = url.parse(req.url);
-  var target = parsedUrl.protocol + '//' + parsedUrl.hostname;
-  proxy.web(req, res, {target: target, secure: false});
-}).listen(8213);
+const PORT = 8213;
 
-server.on('connect', function (req, socket) {
-  console.log('Receiving reverse proxy request for:' + req.url);
+const customHeader = process.env.CUSTOM_HEADER ?? "token";
+const urlBase = () => {
+  return process.env.REMOTE_URL ?? "https://www.google.com"
+}
 
-  var serverUrl = url.parse('https://' + req.url);
+app.use((req, res) => {
+    const url = urlBase() + req.originalUrl;
+    const requestInit = {
+      method: req.method,
+      headers: {
+        [customHeader]: req.headers["customHeader"],
+        "Content-Type": "application/json",
+      },
+    }
+    let childLogger = logger.child({url, requestInit});
 
-  var srvSocket = net.connect(serverUrl.port, serverUrl.hostname, function() {
-    socket.write('HTTP/1.1 200 Connection Established\r\n' +
-    'Proxy-agent: Node-Proxy\r\n' +
-    '\r\n');
-    srvSocket.pipe(socket);
-    socket.pipe(srvSocket);
-  });
+    res.setHeader("Content-Type", "application/json");
+
+    fetch(url, requestInit).then(async (response) => {
+      res.statusCode = response.status;
+      if (response.ok) {
+        return response.json(); // o response.text() si esperas texto en lugar de un objeto JSON
+      } else {
+        childLogger = childLogger.child({
+          status: response.status,
+          statusText: response.statusText,
+        })
+        throw new Error(await response.text());
+      }
+    }).then((data) => {
+      childLogger.info({jsonLength: data.length}, 'Nueva solicitud respondida de forma satisfactoria');
+      res.write(JSON.stringify(data));
+      res.end();
+    }).catch((error) => {
+      childLogger.error(error.stack);
+      res.write(
+        error.message
+      );
+      res.end();
+    });
+}).listen(PORT, () => {
+  const PORT_VALUE = `${PORT}`.yellow
+  const HTTP_PROXY_SERVER = "http proxy server".blue;
+  const STARTED = "started".green;
+  const ON_PORT = "on port".blue;
+  logger.info(
+    `${HTTP_PROXY_SERVER} ${STARTED} ${ON_PORT} ${PORT_VALUE}
+      `
+  );
 });
-
-console.log('http proxy server'.blue + ' started '.green + 'on port '.blue + '8213'.yellow);
